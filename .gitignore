@@ -1,0 +1,13 @@
+*.zip
+
+__pycache__/
+*.pyc
+
+.vscode/
+
+.venv/
+venv/
+
+demo.csv
+demo.json
+demo.txt
