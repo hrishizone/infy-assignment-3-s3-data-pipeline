@@ -1,0 +1,467 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Assignment-3 Data Pipeline
+
+Parameters:
+  DeploymentBucketName:
+    Type: String
+    Description: S3 bucket created by deployment script containing ZIPs & scripts
+
+  EmailSubscription:
+    Type: String
+    Description: Email address to receive SNS notifications
+
+  SaveS3ConfigVersion:
+    Type: String
+    Description: S3 VersionId for lambdas/SaveS3Config.zip
+
+  TriggerGlueJobVersion:
+    Type: String
+    Description: S3 VersionId for lambdas/TriggerGlueJob.zip
+
+  LambdaGlueJobSuccessVersion:
+    Type: String
+    Description: S3 VersionId for lambdas/LambdaGlueJobSuccess.zip
+
+  LambdaGlueJobFailureVersion:
+    Type: String
+    Description: S3 VersionId for lambdas/LambdaGlueJobFailure.zip
+
+Resources:
+
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-source"
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Topic: !Ref S3NotificationTopic
+            Event: "s3:ObjectCreated:*"
+
+  CrawlerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-crawler"
+
+  AthenaQueryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-athena"
+
+  S3NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-sns"
+      DisplayName: "S3 Notification Topic"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref EmailSubscription
+
+  S3ToSNSPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref S3NotificationTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowAllS3BucketsToPublish"
+            Effect: Allow
+            Principal:
+              Service: "s3.amazonaws.com"
+            Action: "SNS:Publish"
+            Resource: !Ref S3NotificationTopic
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CustomLambdaPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - glue:StartJobRun
+                  - glue:GetJob
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - glue:StartCrawler
+                  - glue:GetCrawler
+                  - glue:GetCrawlerMetrics
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${AWS::StackName}-source
+                  - !Sub arn:aws:s3:::${AWS::StackName}-source/*
+                  - !Sub arn:aws:s3:::${DeploymentBucketName}
+                  - !Sub arn:aws:s3:::${DeploymentBucketName}/*
+                  - !Sub arn:aws:s3:::${AWS::StackName}-athena
+                  - !Sub arn:aws:s3:::${AWS::StackName}-athena/*
+
+  SaveS3ConfigLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-SaveS3Config"
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucketName
+        S3Key: lambdas/SaveS3Config.zip
+        S3ObjectVersion: !Ref SaveS3ConfigVersion
+      Timeout: 30
+      MemorySize: 128
+
+  TriggerGlueJobLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-TriggerGlueJob"
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucketName
+        S3Key: lambdas/TriggerGlueJob.zip
+        S3ObjectVersion: !Ref TriggerGlueJobVersion
+      Timeout: 30
+      MemorySize: 128
+
+  LambdaGlueJobSuccess:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-LambdaGlueJobSuccess"
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucketName
+        S3Key: lambdas/LambdaGlueJobSuccess.zip
+        S3ObjectVersion: !Ref LambdaGlueJobSuccessVersion
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          ATHENA_OUTPUT_BUCKET: !Sub "${AWS::StackName}-athena"
+          TXT_CRAWLER: "TxtFilesCrawler"
+          CSV_CRAWLER: "CsvFilesCrawler"
+          JSON_CRAWLER: "JsonFilesCrawler"
+          GLUE_DATABASE: "my_data_db"
+
+  LambdaGlueJobFailure:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-LambdaGlueJobFailure"
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucketName
+        S3Key: lambdas/LambdaGlueJobFailure.zip
+        S3ObjectVersion: !Ref LambdaGlueJobFailureVersion
+      Timeout: 60
+      MemorySize: 128
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref S3NotificationTopic
+
+  SaveS3ConfigSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref S3NotificationTopic
+      Protocol: lambda
+      Endpoint: !GetAtt SaveS3ConfigLambda.Arn
+
+  TriggerGlueJobSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref S3NotificationTopic
+      Protocol: lambda
+      Endpoint: !GetAtt TriggerGlueJobLambda.Arn
+
+  AllowSNSToInvokeSaveS3Config:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SaveS3ConfigLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref S3NotificationTopic
+
+  AllowSNSToInvokeTriggerGlueJob:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TriggerGlueJobLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref S3NotificationTopic
+
+  S3ObjectMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: S3ObjectMetadata
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: object_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: object_key
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: S3ObjectMetadata
+
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-GlueServiceRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+
+  GlueJobJSONAbove10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: json-above-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_json_large.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobJSON5to10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: json-5-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_json_medium.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobJSON0to5:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: json-0-5kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_json_small.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobCSVAbove10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: csv-above-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_csv_large.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobCSV5to10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: csv-5-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_csv_medium.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobCSV0to5:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: csv-0-5kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_csv_small.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobTXTAbove10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: txt-above-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_txt_large.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobTXT5to10:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: txt-5-10kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_txt_medium.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobTXT0to5:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: txt-0-5kb-job
+      Role: !Ref GlueServiceRole
+      Command:
+        Name: pythonshell
+        ScriptLocation: !Sub "s3://${DeploymentBucketName}/scripts/transform_txt_small.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--crawler_bucket": !Sub "${AWS::StackName}-crawler"
+      GlueVersion: "1.0"
+      MaxCapacity: 0.0625
+
+  GlueJobSuccessRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.glue
+        detail-type:
+          - Glue Job State Change
+        detail:
+          state:
+            - SUCCEEDED
+      Targets:
+        - Arn: !GetAtt LambdaGlueJobSuccess.Arn
+          Id: "TriggerOnSuccess"
+
+  GlueJobFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.glue
+        detail-type:
+          - Glue Job State Change
+        detail:
+          state:
+            - FAILED
+      Targets:
+        - Arn: !GetAtt LambdaGlueJobFailure.Arn
+          Id: "TriggerOnFailure"
+
+  AllowEventBridgeInvokeSuccessLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaGlueJobSuccess
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt GlueJobSuccessRule.Arn
+
+  AllowEventBridgeInvokeFailureLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaGlueJobFailure
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt GlueJobFailureRule.Arn
+
+  TxtFilesCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: TxtFilesCrawler
+      Role: !Ref GlueServiceRole
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${AWS::StackName}-crawler/output/txt/"
+      TablePrefix: "txt_"
+
+  CsvFilesCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: CsvFilesCrawler
+      Role: !Ref GlueServiceRole
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${AWS::StackName}-crawler/output/csv/"
+      TablePrefix: "csv_"
+
+  JsonFilesCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: JsonFilesCrawler
+      Role: !Ref GlueServiceRole
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${AWS::StackName}-crawler/output/json/"
+      TablePrefix: "json_"
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "my_data_db"
+        Description: "Database for ETL crawler outputs"
+
