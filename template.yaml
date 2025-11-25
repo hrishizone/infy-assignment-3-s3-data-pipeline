@@ -97,6 +97,11 @@ Resources:
                   - dynamodb:Query
                   - glue:StartJobRun
                   - glue:GetJob
+                  - glue:GetTables
+                  - glue:GetTable
+                  - glue:GetDatabase       
+                  - glue:GetDatabases
+                  - glue:GetPartitions 
                 Resource: "*"
               - Effect: Allow
                 Action:
@@ -116,6 +121,7 @@ Resources:
                   - s3:GetObject
                   - s3:HeadObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation
                   - s3:PutObject
                 Resource:
                   - !Sub arn:aws:s3:::${AWS::StackName}-source
@@ -124,6 +130,8 @@ Resources:
                   - !Sub arn:aws:s3:::${DeploymentBucketName}/*
                   - !Sub arn:aws:s3:::${AWS::StackName}-athena
                   - !Sub arn:aws:s3:::${AWS::StackName}-athena/*
+                  - !Sub arn:aws:s3:::${AWS::StackName}-crawler         
+                  - !Sub arn:aws:s3:::${AWS::StackName}-crawler/*      
 
   SaveS3ConfigLambda:
     Type: AWS::Lambda::Function
