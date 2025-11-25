@@ -53,9 +53,9 @@ def upload_and_get_version(bucket, key, file_path, s3):
     return version
 
 
-def deploy_stack(cfn, template_body, params):
+def deploy_stack(cloudformation_client, template_body, params):
     try:
-        cfn.describe_stacks(StackName=STACK_NAME)
+        cloudformation_client.describe_stacks(StackName=STACK_NAME)
         exists = True
     except botocore.exceptions.ClientError:
         exists = False
@@ -64,7 +64,7 @@ def deploy_stack(cfn, template_body, params):
         logger.info("Updating stack...")
 
         try:
-            resp = cfn.update_stack(
+            resp = cloudformation_client.update_stack(
                 StackName=STACK_NAME,
                 TemplateBody=template_body,
                 Parameters=params,
@@ -72,7 +72,7 @@ def deploy_stack(cfn, template_body, params):
             )
 
             logger.info("Update Started: %s", resp["StackId"])
-            waiter = cfn.get_waiter("stack_update_complete")
+            waiter = cloudformation_client.get_waiter("stack_update_complete")
             waiter.wait(StackName=STACK_NAME)
 
             logger.info("Stack Updated Successfully!")
@@ -84,7 +84,7 @@ def deploy_stack(cfn, template_body, params):
 
     else:
         logger.info("Creating stack...")
-        resp = cfn.create_stack(
+        resp = cloudformation_client.create_stack(
             StackName=STACK_NAME,
             TemplateBody=template_body,
             Parameters=params,
@@ -92,7 +92,7 @@ def deploy_stack(cfn, template_body, params):
         )
         logger.info("Create Started: %s", resp["StackId"])
 
-        waiter = cfn.get_waiter("stack_create_complete")
+        waiter = cloudformation_client.get_waiter("stack_create_complete")
         waiter.wait(StackName=STACK_NAME)
 
         logger.info("Stack Created Successfully!")
@@ -100,7 +100,7 @@ def deploy_stack(cfn, template_body, params):
 
 def main():
     s3 = boto3.client("s3", region_name=REGION)
-    cfn = boto3.client("cloudformation", region_name=REGION)
+    cloudformation_client = boto3.client("cloudformation", region_name=REGION)
 
     deployment_bucket = f"{STACK_NAME}-deployment"
 
@@ -144,7 +144,7 @@ def main():
         {"ParameterKey": "LambdaGlueJobFailureVersion", "ParameterValue": lambda_versions["LambdaGlueJobFailure"]},
     ]
 
-    deploy_stack(cfn, template_body, params)
+    deploy_stack(cloudformation_client, template_body, params)
 
 
 if __name__ == "__main__":

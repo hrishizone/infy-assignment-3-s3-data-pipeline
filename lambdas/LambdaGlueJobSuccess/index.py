@@ -19,7 +19,6 @@ def lambda_handler(event, context):
     job_name = detail.get('jobName', 'unknown')
     logger.info("Triggered by Glue job: %s", job_name)
 
-    # Decide which crawler and table prefix to use
     if "txt" in job_name:
         crawler_name = os.environ['TXT_CRAWLER']
         table_prefix = "txt_"
@@ -36,7 +35,6 @@ def lambda_handler(event, context):
     logger.info("Starting crawler: %s", crawler_name)
     glue.start_crawler(Name=crawler_name)
 
-    # Wait for crawler to complete
     max_wait_seconds = 90
     waited = 0
 
@@ -55,7 +53,6 @@ def lambda_handler(event, context):
             logger.warning("Crawler did not reach READY in time, continuing anyway.")
             break
 
-    # Get one table from Glue Catalog matching the prefix (e.g. txt_, csv_, json_)
     logger.info("Getting table for prefix: %s in database: %s", table_prefix, GLUE_DATABASE)
     tables_resp = glue.get_tables(
         DatabaseName=GLUE_DATABASE,
@@ -69,7 +66,6 @@ def lambda_handler(event, context):
     table_name = tables[0]["Name"]
     logger.info("Using table: %s", table_name)
 
-    # Run Athena query: SELECT * FROM table
     query = f"SELECT * FROM {table_name}"
     output_location = f"s3://{ATHENA_OUTPUT_BUCKET}/results/"
 
@@ -84,7 +80,6 @@ def lambda_handler(event, context):
     logger.info("Athena query started. QueryExecutionId: %s", qid)
     logger.info("Results will be written under: %s", output_location)
 
-    # 🔹 NEW: wait for Athena to finish
     while True:
         q = athena.get_query_execution(QueryExecutionId=qid)
         state = q['QueryExecution']['Status']['State']
